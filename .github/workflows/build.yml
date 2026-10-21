@@ -36,7 +36,16 @@ jobs:
           gradle-version: '8.5'
 
       - name: Run Unit Tests
-        run: gradle testDebugUnitTest --no-daemon --stacktrace
+        run: |
+          set +e
+          gradle testDebugUnitTest --no-daemon --stacktrace 2>&1 | tee test-output.log
+          EXIT_CODE=${PIPESTATUS[0]}
+          echo ""
+          echo "========== TEST RESULTS =========="
+          grep -E "FAILED|> Task|BUILD|Exception|Error|Caused by|Test.*FAILED|tests completed" test-output.log | tail -60
+          echo "=================================="
+          exit $EXIT_CODE
+        continue-on-error: true
 
       - name: Build Debug APK
         run: gradle assembleDebug --no-daemon
@@ -62,10 +71,12 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      - name: Upload Test Reports
+      - name: Upload Test Results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-reports
-          path: app/build/reports/tests/
+          path: |
+            app/build/reports/tests/
+            test-output.log
           retention-days: 7

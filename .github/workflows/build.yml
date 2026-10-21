@@ -36,24 +36,7 @@ jobs:
           gradle-version: '8.5'
 
       - name: Run Unit Tests
-        run: |
-          set +e
-          gradle testDebugUnitTest --no-daemon --stacktrace 2>&1 | tee test-output.log
-          EXIT_CODE=${PIPESTATUS[0]}
-          echo ""
-          echo "========== LAST 200 LINES =========="
-          tail -200 test-output.log
-          echo "====================================="
-          echo ""
-          echo "========== COMPILATION ERRORS =========="
-          grep -i "^e:" test-output.log || echo "No compilation errors"
-          echo "========================================="
-          echo ""
-          echo "========== TEST FAILURES =========="
-          grep -i "FAILED\|Exception\|Error.*at " test-output.log | head -40 || echo "No test failures found in output"
-          echo "====================================="
-          exit $EXIT_CODE
-        continue-on-error: true
+        run: gradle testDebugUnitTest --no-daemon --stacktrace
 
       - name: Build Debug APK
         run: gradle assembleDebug --no-daemon

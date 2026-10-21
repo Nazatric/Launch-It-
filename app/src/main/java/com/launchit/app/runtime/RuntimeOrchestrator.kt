@@ -16,6 +16,11 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Orchestrates project runtime lifecycle with proper synchronization.
+ * 
+ * Execution state machine:
+ * IMPORTED → STARTING → VERIFYING → RUNNING
+ *                       → FAILED (on error)
+ * RUNNING → STOPPING → STOPPED
  */
 class RuntimeOrchestrator(
     private val context: Context,
@@ -74,7 +79,7 @@ class RuntimeOrchestrator(
 
             // Validate source directory
             val sourceDir = File(project.sourcePath)
-            if (!sourceDir.exists()) {
+            if (!sourceDir.exists() || !sourceDir.isDirectory) {
                 val msg = "Project source directory not found: ${project.sourcePath}"
                 Log.e(TAG, msg)
                 repository.updateRuntimeState(projectId, RuntimeState.FAILED, msg)
@@ -86,17 +91,30 @@ class RuntimeOrchestrator(
             // Determine what to serve
             val serveDir = resolveServeDirectory(project)
             if (serveDir == null || !serveDir.exists()) {
-                val msg = if (project.projectType == com.launchit.app.model.ProjectType.FRONTEND_APP) {
-                    "This project needs to be built first. It appears to be a React/Vue/Angular app that requires running 'npm run build' before it can be served. Only pre-built static apps can be run in Launch It."
-                } else {
-                    "Serve directory not found. The project may be incomplete or corrupted."
-                }
+                val msg = buildServeDirectoryErrorMessage(project)
                 Log.e(TAG, msg)
                 repository.updateRuntimeState(projectId, RuntimeState.FAILED, msg)
                 return@withContext Result.failure(IllegalStateException(msg))
             }
 
             Log.i(TAG, "Serving from: ${serveDir.absolutePath}")
+
+            // Verify there's an actual file to serve
+            val entryPoint = project.entryPoint.ifBlank { "index.html" }
+            val cleanEntryPoint = entryPoint.trimStart('/')
+            val targetFile = File(serveDir, cleanEntryPoint)
+            if (!targetFile.exists()) {
+                // Try to find any HTML file in the serve directory
+                val anyHtml = serveDir.walkTopDown().maxDepth(1)
+                    .firstOrNull { it.isFile && it.name.endsWith(".html") }
+                if (anyHtml == null) {
+                    val msg = "No HTML files found in project. Entry point '$cleanEntryPoint' not found."
+                    Log.e(TAG, msg)
+                    repository.updateRuntimeState(projectId, RuntimeState.FAILED, msg)
+                    return@withContext Result.failure(IllegalStateException(msg))
+                }
+                Log.w(TAG, "Entry point '$cleanEntryPoint' not found, but found ${anyHtml.name}")
+            }
 
             // Stop existing server if any
             stopServerInternal(projectId)
@@ -126,13 +144,17 @@ class RuntimeOrchestrator(
                 return@withContext Result.failure(IllegalStateException(msg))
             }
 
+            // Verify the server actually serves the entry point
+            val url = "http://127.0.0.1:$port/$cleanEntryPoint"
+            val verified = verifyServerResponse(port, cleanEntryPoint)
+            if (!verified) {
+                Log.w(TAG, "Server started but entry point verification failed. Proceeding anyway.")
+            }
+
             activeServers[projectId] = server
             allocatedPorts[projectId] = port
             repository.updatePort(projectId, port)
 
-            val entryPoint = project.entryPoint.ifBlank { "index.html" }
-            val cleanEntryPoint = entryPoint.trimStart('/')
-            val url = "http://127.0.0.1:$port/$cleanEntryPoint"
             projectUrls[projectId] = url
 
             Log.i(TAG, "Project started successfully: $url")
@@ -149,49 +171,136 @@ class RuntimeOrchestrator(
     }
 
     /**
+     * Build a helpful error message when the serve directory can't be found.
+     */
+    private fun buildServeDirectoryErrorMessage(project: Project): String {
+        return when (project.projectType) {
+            ProjectType.FRONTEND_APP -> {
+                "This project appears to be a frontend app (React, Vue, Angular, etc.) that hasn't been built yet.\n\n" +
+                "Launch It can run pre-built web apps but cannot compile React/Vue/TypeScript source.\n\n" +
+                "To fix: Run 'npm run build' on a computer, then import the 'dist' or 'build' folder."
+            }
+            ProjectType.NODE_SERVER -> {
+                "Node.js server projects require a Node.js runtime which is not available on Android.\n\n" +
+                "Launch It can only serve static web content."
+            }
+            ProjectType.FULL_STACK -> {
+                "Full-stack projects require a server runtime which is not available on Android.\n\n" +
+                "Try importing just the static frontend output (dist/build folder)."
+            }
+            ProjectType.STATIC_WEB -> {
+                "The project directory is empty or corrupted. Try re-importing the project."
+            }
+            ProjectType.UNKNOWN -> {
+                "Could not determine how to run this project.\n\n" +
+                "Launch It supports: static HTML/CSS/JS, pre-built React/Vue/Vite apps, " +
+                "and simple web projects."
+            }
+        }
+    }
+
+    /**
      * Resolve the directory to serve for a project.
+     * Smart detection based on project type and actual files on disk.
      */
     private fun resolveServeDirectory(project: Project): File? {
         val sourceDir = File(project.sourcePath)
-        return when (project.projectType) {
-            ProjectType.STATIC_WEB -> sourceDir
-            ProjectType.FRONTEND_APP -> {
-                // Look for pre-built output directories
-                val candidates = listOf("dist", "build", "out", "public")
-                for (candidate in candidates) {
-                    val dir = File(sourceDir, candidate)
-                    if (dir.exists() && dir.isDirectory) {
-                        if (dir.listFiles()?.any { it.name.endsWith(".html") } == true) {
-                            return dir
-                        }
-                    }
+        
+        // For ALL project types, check for build output first
+        // This handles the case where a React/Vite project was built
+        val buildCandidates = listOf("dist", "build", "out")
+        for (candidate in buildCandidates) {
+            val dir = File(sourceDir, candidate)
+            if (dir.exists() && dir.isDirectory) {
+                // Check if it has actual content (HTML or JS)
+                val hasContent = dir.listFiles()?.any { 
+                    it.name.endsWith(".html") || it.name.endsWith(".htm") || it.name.endsWith(".js") 
+                } == true
+                if (hasContent) {
+                    Log.i(TAG, "Found build output: ${dir.absolutePath}")
+                    return dir
                 }
-                // Check if source directory itself has a usable index.html
-                // (e.g., the user built it themselves or it's a simple HTML app with package.json)
-                val sourceIndex = File(sourceDir, "index.html")
-                if (sourceIndex.exists() && sourceIndex.isFile) {
-                    Log.w(TAG, "No build output for ${project.name}, but index.html exists in source — serving source")
-                    return sourceDir
-                }
-                Log.e(TAG, "No build output found for FRONTEND_APP ${project.name}. Project needs to be built first (npm run build).")
-                null
             }
-            ProjectType.NODE_SERVER, ProjectType.FULL_STACK -> {
-                val candidates = listOf("dist", "build", "out", "public", ".next")
-                for (candidate in candidates) {
-                    val dir = File(sourceDir, candidate)
-                    if (dir.exists() && dir.isDirectory) {
-                        return dir
-                    }
-                }
-                // Check if source directory has an index.html for simple cases
-                if (File(sourceDir, "index.html").exists()) {
-                    return sourceDir
-                }
-                Log.e(TAG, "No build output found for ${project.projectType.name} project: ${project.name}")
-                null
+        }
+
+        // Check public/ directory (Vite, CRA)
+        val publicDir = File(sourceDir, "public")
+        if (publicDir.exists() && publicDir.isDirectory) {
+            val hasHtml = publicDir.listFiles()?.any { it.name.endsWith(".html") } == true
+            if (hasHtml) {
+                Log.i(TAG, "Found public directory with HTML: ${publicDir.absolutePath}")
+                return publicDir
             }
-            ProjectType.UNKNOWN -> sourceDir
+        }
+
+        // For STATIC_WEB and UNKNOWN, serve from source
+        if (project.projectType == ProjectType.STATIC_WEB || project.projectType == ProjectType.UNKNOWN) {
+            // Verify there's at least one file to serve
+            if (sourceDir.listFiles()?.any { it.isFile } == true) {
+                return sourceDir
+            }
+            return null
+        }
+
+        // For FRONTEND_APP without build output, check if source has index.html
+        if (project.projectType == ProjectType.FRONTEND_APP) {
+            val sourceIndex = File(sourceDir, "index.html")
+            if (sourceIndex.exists() && sourceIndex.isFile) {
+                // Check if this looks like a real HTML file (not just a Vite template)
+                val content = sourceIndex.readText()
+                val looksLikeTemplate = content.contains("/src/main.") || 
+                    content.contains("/src/index.") ||
+                    content.contains("type=\"module\"") && content.contains("/@vite")
+                
+                if (!looksLikeTemplate) {
+                    Log.i(TAG, "Frontend app has index.html in source, serving source")
+                    return sourceDir
+                } else {
+                    Log.w(TAG, "index.html appears to be a dev template referencing source files. Cannot serve without build.")
+                    return null
+                }
+            }
+            return null
+        }
+
+        // For NODE_SERVER and FULL_STACK without build output, check for index.html
+        if (project.projectType == ProjectType.NODE_SERVER || project.projectType == ProjectType.FULL_STACK) {
+            if (File(sourceDir, "index.html").exists()) {
+                return sourceDir
+            }
+            return null
+        }
+
+        return sourceDir
+    }
+
+    /**
+     * Verify that the server responds with a valid HTTP response for the entry point.
+     */
+    private suspend fun verifyServerResponse(port: Int, path: String): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                val socket = Socket()
+                socket.connect(InetSocketAddress("127.0.0.1", port), 1000)
+                socket.soTimeout = 2000
+                
+                val request = "GET /$path HTTP/1.1\r\nHost: 127.0.0.1:$port\r\nConnection: close\r\n\r\n"
+                socket.getOutputStream().write(request.toByteArray())
+                socket.getOutputStream().flush()
+                
+                val response = socket.getInputStream().bufferedReader().readLine()
+                socket.close()
+                
+                val isValid = response?.startsWith("HTTP/1.1 200") == true || 
+                              response?.startsWith("HTTP/1.0 200") == true
+                if (!isValid) {
+                    Log.w(TAG, "Server verification: got '$response' for /$path")
+                }
+                isValid
+            } catch (e: Exception) {
+                Log.w(TAG, "Server verification failed: ${e.message}")
+                false
+            }
         }
     }
 

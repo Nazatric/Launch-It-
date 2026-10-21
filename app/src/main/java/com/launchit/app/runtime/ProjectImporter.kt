@@ -38,12 +38,19 @@ class ProjectImporter(
     private val emptyAnalysis = ProjectAnalyzer.AnalysisResult(
         projectType = ProjectType.UNKNOWN,
         entryPoint = "",
+        serveDirectory = "",
         description = "",
         requiresNode = false,
         packageManager = null,
         buildScript = null,
         startScript = null,
-        iconPath = null
+        iconPath = null,
+        hasBuildOutput = false,
+        needsBuild = false,
+        framework = null,
+        isStaticServe = false,
+        warnings = emptyList(),
+        errorMessage = null
     )
 
     /**
@@ -145,6 +152,7 @@ class ProjectImporter(
             projectType = analysis.projectType,
             entryPoint = analysis.entryPoint,
             sourcePath = actualProjectDir.absolutePath,
+            buildOutputPath = if (analysis.serveDirectory != actualProjectDir.absolutePath) analysis.serveDirectory else null,
             iconPath = analysis.iconPath,
             runtimeState = RuntimeState.IMPORTED,
             description = analysis.description,
@@ -152,7 +160,8 @@ class ProjectImporter(
             packageManager = analysis.packageManager,
             buildScript = analysis.buildScript,
             startScript = analysis.startScript,
-            storageUsedBytes = calculateDirSize(actualProjectDir)
+            storageUsedBytes = calculateDirSize(actualProjectDir),
+            errorMessage = if (analysis.needsBuild) analysis.warnings.firstOrNull() else null
         )
 
         // Save to database
@@ -368,6 +377,7 @@ class ProjectImporter(
             projectType = analysis.projectType,
             entryPoint = analysis.entryPoint,
             sourcePath = actualProjectDir.absolutePath,
+            buildOutputPath = if (analysis.serveDirectory != actualProjectDir.absolutePath) analysis.serveDirectory else null,
             iconPath = analysis.iconPath,
             runtimeState = RuntimeState.IMPORTED,
             description = analysis.description,
@@ -375,7 +385,8 @@ class ProjectImporter(
             packageManager = analysis.packageManager,
             buildScript = analysis.buildScript,
             startScript = analysis.startScript,
-            storageUsedBytes = calculateDirSize(actualProjectDir)
+            storageUsedBytes = calculateDirSize(actualProjectDir),
+            errorMessage = if (analysis.needsBuild) analysis.warnings.firstOrNull() else null
         )
 
         // Save to database

@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build Debug APK
+    name: Build & Test
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -36,35 +36,10 @@ jobs:
           gradle-version: '8.5'
 
       - name: Run Unit Tests
-        run: gradle testDebugUnitTest --no-daemon
-        continue-on-error: true
+        run: gradle testDebugUnitTest --no-daemon --stacktrace
 
       - name: Build Debug APK
-        id: build
-        run: |
-          set +e
-          gradle assembleDebug --no-daemon --stacktrace > build-output.log 2>&1
-          EXIT_CODE=$?
-          set -e
-          echo "Build exit code: $EXIT_CODE"
-          echo "========================================="
-          echo "BUILD OUTPUT (last 200 lines):"
-          echo "========================================="
-          tail -200 build-output.log
-          echo "========================================="
-          echo "COMPILATION ERRORS:"
-          echo "========================================="
-          grep "^e:" build-output.log || echo "No compilation errors found"
-          echo "========================================="
-          exit $EXIT_CODE
-
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log
-          path: build-output.log
-          retention-days: 7
+        run: gradle assembleDebug --no-daemon
 
       - name: Verify APK
         run: |
@@ -86,3 +61,11 @@ jobs:
           path: apk-output/launchit-debug.apk
           retention-days: 30
           if-no-files-found: error
+
+      - name: Upload Test Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: app/build/reports/tests/
+          retention-days: 7

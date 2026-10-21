@@ -119,8 +119,15 @@ class ProjectAnalyzer {
             else -> ProjectType.FRONTEND_APP
         }
 
-        // Determine entry point
-        val entryPoint = findEntryPoint(root, scan, buildOutputDir)
+        // Determine entry point based on project type
+        val entryPoint = when (projectType) {
+            ProjectType.NODE_SERVER, ProjectType.FULL_STACK -> {
+                // For server projects, use the "main" field from package.json or find JS entry
+                val mainField = if (json.has("main")) json.optString("main", null) else null
+                mainField ?: findServerEntryPoint(root, scan) ?: "index.js"
+            }
+            else -> findEntryPoint(root, scan, buildOutputDir)
+        }
         val serveDir = if (buildOutputDir != null && hasBuildOutput) {
             buildOutputDir.absolutePath
         } else {
@@ -362,6 +369,18 @@ class ProjectAnalyzer {
     }
 
     // ==================== Entry Point Resolution ====================
+
+    /**
+     * Find the entry point for a server-side project (Node.js, etc.)
+     * Looks for common server entry point files.
+     */
+    private fun findServerEntryPoint(root: File, scan: ProjectScan): String? {
+        val candidates = listOf("index.js", "server.js", "app.js", "main.js", "src/index.js", "src/server.js")
+        for (candidate in candidates) {
+            if (File(root, candidate).exists()) return candidate
+        }
+        return null
+    }
 
     /**
      * Find the best entry point HTML file, ranked by priority.

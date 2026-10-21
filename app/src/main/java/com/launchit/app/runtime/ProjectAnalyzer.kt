@@ -354,13 +354,13 @@ class ProjectAnalyzer {
         )
     }
 
-    private fun findHtmlFilesRecursive(dir: File, results: MutableList<String>, depth: Int) {
+    private fun findHtmlFilesRecursive(dir: File, results: MutableList<String>, depth: Int, root: File = dir) {
         if (depth >= MAX_SCAN_DEPTH) return
         dir.listFiles()?.forEach { file ->
             if (file.isDirectory && file.name !in SKIP_DIRS && !file.name.startsWith(".")) {
-                findHtmlFilesRecursive(file, results, depth + 1)
+                findHtmlFilesRecursive(file, results, depth + 1, root)
             } else if (file.isFile && (file.name.endsWith(".html") || file.name.endsWith(".htm"))) {
-                val relativePath = file.relativeTo(dir).path
+                val relativePath = file.relativeTo(root).path
                 if (relativePath !in results) {
                     results.add(relativePath)
                 }

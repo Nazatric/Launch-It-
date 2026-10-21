@@ -66,6 +66,12 @@ android {
         checkReleaseBuilds = true
         warningsAsErrors = false
     }
+
+    testOptions {
+        unitTests {
+            isReturnDefaultValues = true
+        }
+    }
 }
 
 dependencies {

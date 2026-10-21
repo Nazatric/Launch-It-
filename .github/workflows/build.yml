@@ -42,10 +42,9 @@ jobs:
           EXIT_CODE=${PIPESTATUS[0]}
           echo ""
           echo "========== TEST RESULTS =========="
-          grep -E "FAILED|> Task|BUILD|Exception|Error|Caused by|Test.*FAILED|tests completed" test-output.log | tail -60
+          grep -E "FAILED|> Task|BUILD|Exception|Caused by|Test.*FAILED|tests completed" test-output.log | tail -80 || true
           echo "=================================="
           exit $EXIT_CODE
-        continue-on-error: true
 
       - name: Build Debug APK
         run: gradle assembleDebug --no-daemon

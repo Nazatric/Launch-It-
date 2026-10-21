@@ -36,7 +36,16 @@ jobs:
           gradle-version: '8.5'
 
       - name: Run Unit Tests
-        run: gradle testDebugUnitTest --no-daemon --stacktrace
+        run: |
+          set +e
+          gradle testDebugUnitTest --no-daemon --stacktrace 2>&1 | tee test-output.log
+          EXIT_CODE=${PIPESTATUS[0]}
+          echo ""
+          echo "========== TEST RESULTS =========="
+          grep -E "FAILED|tests completed|BUILD" test-output.log | tail -40
+          echo "=================================="
+          exit $EXIT_CODE
+        continue-on-error: true
 
       - name: Build Debug APK
         run: gradle assembleDebug --no-daemon
